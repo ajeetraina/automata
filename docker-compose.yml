@@ -1,0 +1,193 @@
+version: "3.9"
+
+x-gpu-deploy: &gpu-deploy
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kidstory-ollama
+    <<: [*gpu-deploy, *restart]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+      - ./services/ollama/entrypoint.sh:/entrypoint.sh
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    environment:
+      - OLLAMA_GPU_MEMORY=40000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  flux:
+    build:
+      context: ./services/flux
+      dockerfile: Dockerfile
+    container_name: kidstory-flux
+    <<: [*gpu-deploy, *restart]
+    ports:
+      - "7860:7860"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+      - ./output/images:/output/images
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+
+  wan2:
+    build:
+      context: ./services/wan2
+      dockerfile: Dockerfile
+    container_name: kidstory-wan2
+    <<: [*gpu-deploy, *restart]
+    ports:
+      - "7861:7861"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+      - ./output/videos:/output/videos
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - MODEL_ID=Wan-AI/Wan2.1-T2V-14B
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7861/health"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+
+  cogvideox:
+    build:
+      context: ./services/cogvideox
+      dockerfile: Dockerfile
+    container_name: kidstory-cogvideox
+    <<: [*gpu-deploy, *restart]
+    ports:
+      - "7862:7862"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+      - ./output/videos:/output/videos
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - MODEL_ID=THUDM/CogVideoX-5b-I2V
+    profiles:
+      - cogvideo
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7862/health"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: kidstory-kokoro
+    <<: *restart
+    ports:
+      - "8880:8880"
+    volumes:
+      - kokoro-models:/app/models
+    environment:
+      - DEFAULT_VOICE=af_sky
+      - SPEED=0.9
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  musicgen:
+    build:
+      context: ./services/musicgen
+      dockerfile: Dockerfile
+    container_name: kidstory-musicgen
+    <<: [*gpu-deploy, *restart]
+    ports:
+      - "7863:7863"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+      - ./output/music:/output/music
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - MODEL_ID=facebook/musicgen-medium
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7863/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  ffmpeg-api:
+    build:
+      context: ./services/ffmpeg-api
+      dockerfile: Dockerfile
+    container_name: kidstory-ffmpeg
+    <<: *restart
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./output:/output
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  pipeline-api:
+    build:
+      context: ./pipeline
+      dockerfile: Dockerfile
+    container_name: kidstory-pipeline
+    <<: *restart
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./output:/output
+      - ./stories:/stories
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - FLUX_URL=http://flux:7860
+      - WAN2_URL=http://wan2:7861
+      - KOKORO_URL=http://kokoro:8880
+      - MUSICGEN_URL=http://musicgen:7863
+      - FFMPEG_URL=http://ffmpeg-api:8000
+    depends_on:
+      ollama:
+        condition: service_healthy
+      flux:
+        condition: service_healthy
+      wan2:
+        condition: service_healthy
+      kokoro:
+        condition: service_healthy
+      musicgen:
+        condition: service_healthy
+      ffmpeg-api:
+        condition: service_healthy
+
+volumes:
+  ollama-models:
+  huggingface-cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/huggingface-cache
+  kokoro-models:
+
+networks:
+  default:
+    name: kidstory-network

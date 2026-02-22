@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff httpx fastapi uvicorn pydantic rich
+      - name: Lint
+        run: ruff check pipeline/ || true
+      - name: Test imports
+        run: |
+          cd pipeline
+          python -c "from story_generator import StoryGenerator; print('OK')"
+          python -c "from image_generator import ImageGenerator; print('OK')"
+          python -c "from video_generator import VideoGenerator; print('OK')"
+          python -c "from tts_generator import TTSGenerator; print('OK')"
+          python -c "from music_generator import MusicGenerator; print('OK')"
+          python -c "from video_assembler import VideoAssembler; print('OK')"
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t kidstory-pipeline ./pipeline
+      - run: docker build -t kidstory-flux ./services/flux
+      - run: docker build -t kidstory-musicgen ./services/musicgen
