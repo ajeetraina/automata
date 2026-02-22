@@ -91,3 +91,18 @@ Built by [Ajeet Singh Raina](https://github.com/ajeetraina) — Docker Captain &
 ## 📄 License
 
 Apache 2.0 — use freely, contribute back!
+
+## 🔀 Branches
+
+| Branch | LLM Backend | Notes |
+|--------|-------------|-------|
+| `main` | Ollama | Default, self-contained |
+| `dmr` | Docker Model Runner | OpenAI-compatible, no extra container |
+
+Switch to the DMR backend:
+```bash
+git checkout dmr
+docker desktop enable model-runner --tcp 12434
+docker model pull ai/llama3.2
+docker compose up -d
+```

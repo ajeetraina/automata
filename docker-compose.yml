@@ -1,5 +1,17 @@
 version: "3.9"
 
+# ============================================================
+# KidsStory AI — Docker Model Runner (DMR) edition
+#
+# LLM is now served by Docker Model Runner (built into
+# Docker Desktop 4.40+) instead of an Ollama container.
+#
+# Setup:
+#   docker desktop enable model-runner --tcp 12434
+#   docker model pull ai/llama3.2
+#   docker compose up -d
+# ============================================================
+
 x-gpu-deploy: &gpu-deploy
   deploy:
     resources:
@@ -12,26 +24,15 @@ x-gpu-deploy: &gpu-deploy
 x-restart: &restart
   restart: unless-stopped
 
+# Allows containers to reach DMR on the host via
+# http://model-runner.docker.internal:12434
+x-dmr-host: &dmr-host
+  extra_hosts:
+    - "model-runner.docker.internal:host-gateway"
+
 services:
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: kidstory-ollama
-    <<: [*gpu-deploy, *restart]
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-models:/root/.ollama
-      - ./services/ollama/entrypoint.sh:/entrypoint.sh
-    entrypoint: ["/bin/bash", "/entrypoint.sh"]
-    environment:
-      - OLLAMA_GPU_MEMORY=40000
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
+  # ── IMAGE GENERATOR — FLUX.1-dev ──────────────────────────
   flux:
     build:
       context: ./services/flux
@@ -51,6 +52,7 @@ services:
       timeout: 30s
       retries: 5
 
+  # ── VIDEO GENERATOR — Wan2.1 ──────────────────────────────
   wan2:
     build:
       context: ./services/wan2
@@ -71,6 +73,7 @@ services:
       timeout: 30s
       retries: 5
 
+  # ── VIDEO GENERATOR — CogVideoX (optional fallback) ───────
   cogvideox:
     build:
       context: ./services/cogvideox
@@ -93,6 +96,7 @@ services:
       timeout: 30s
       retries: 5
 
+  # ── TTS — Kokoro ──────────────────────────────────────────
   kokoro:
     image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
     container_name: kidstory-kokoro
@@ -110,6 +114,7 @@ services:
       timeout: 10s
       retries: 5
 
+  # ── MUSIC — MusicGen ──────────────────────────────────────
   musicgen:
     build:
       context: ./services/musicgen
@@ -130,6 +135,7 @@ services:
       timeout: 10s
       retries: 5
 
+  # ── FFMPEG ASSEMBLER ──────────────────────────────────────
   ffmpeg-api:
     build:
       context: ./services/ffmpeg-api
@@ -146,27 +152,31 @@ services:
       timeout: 10s
       retries: 3
 
+  # ── PIPELINE API ORCHESTRATOR ─────────────────────────────
+  # NOTE: No Ollama service — LLM handled by Docker Model Runner on the host.
+  # Containers reach DMR via model-runner.docker.internal (extra_hosts above).
   pipeline-api:
     build:
       context: ./pipeline
       dockerfile: Dockerfile
     container_name: kidstory-pipeline
-    <<: *restart
+    <<: [*restart, *dmr-host]
     ports:
       - "9000:9000"
     volumes:
       - ./output:/output
       - ./stories:/stories
     environment:
-      - OLLAMA_URL=http://ollama:11434
+      # Docker Model Runner endpoint (host service, not a container)
+      - DMR_BASE_URL=http://model-runner.docker.internal:12434/engines/v1
+      - DMR_MODEL=ai/llama3.2          # override with ai/llama3.3 on Thor
+      # Other services
       - FLUX_URL=http://flux:7860
       - WAN2_URL=http://wan2:7861
       - KOKORO_URL=http://kokoro:8880
       - MUSICGEN_URL=http://musicgen:7863
       - FFMPEG_URL=http://ffmpeg-api:8000
     depends_on:
-      ollama:
-        condition: service_healthy
       flux:
         condition: service_healthy
       wan2:
@@ -177,9 +187,13 @@ services:
         condition: service_healthy
       ffmpeg-api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
-  ollama-models:
   huggingface-cache:
     driver: local
     driver_opts:
